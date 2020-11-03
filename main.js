@@ -1,52 +1,92 @@
-// load libraries
+// load the libs
 const express = require('express')
 const handlebars = require('express-handlebars')
 const mysql = require('mysql2/promise')
 
-//configure PORT
+// configurables
+const LIMIT = 30
+
+// SQL
+const SQL_TV_LIST = 'select tvid, name from tv_shows order by name asc limit ?'
+const SQL_TV_SHOW = 'select * from tv_shows where tvid = ?'
+
+const startApp = async (app, pool) => {
+	const conn = await pool.getConnection()
+	try {
+		console.info('Pinging database...')
+		await conn.ping()
+		app.listen(PORT, () => {
+			console.info(`Application started on port ${PORT} at ${new Date()}`)
+		})
+	} catch(e) {
+		console.error('Cannot ping database', e)
+	} finally {
+		conn.release()
+	}
+}
+
+// configure port
 const PORT = parseInt(process.argv[2]) || parseInt(process.env.PORT) || 3000
 
-//configure connection pool
+// create connection pool
 const pool = mysql.createPool({
-    host: process.env.DB_HOST || 'localhost',
-    port: parseInt(process.env.DB_PORT || 3306),
-    database: process.env.DB_NAME || 'leisure',
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    connectionLimit: 4,
-    timezone: '+8:00'
+	host: process.env.DB_HOST || 'localhost',
+	port: parseInt(process.env.DB_PORT) || 3306,
+	database: 'leisure',
+	user: process.env.DB_USER,
+	password: process.env.DB_PASSWORD,
+	connectionLimit: 4
 })
 
-const router = require('./apps')
-
-//create express
+// create an instance of the application
 const app = express()
 
-//configure handlebars
-app.engine('hbs', handlebars({defaultLayout: 'default.hbs'}))
+// configure handlebars
+app.engine('hbs', handlebars({ defaultLayout: 'default.hbs' }))
 app.set('view engine', 'hbs')
 
-//application 
-app.use('v1', router)
+// configure application
+app.get('/', async (req, resp) => {
 
-//start the server
-pool.getConnection()
-    .then(conn => {
-        console.info('Pinging database...')
-        const p0 = Promise.resolve(conn)
-        const p1 = conn.ping()
-        return Promise.all([ p0, p1 ])
-    })
-    .then(results => {
-        const conn = results[0]
-        // release the connection
-        conn.release()
+	const conn = await pool.getConnection()
 
-        // start the server
-        app.listen(PORT, () => {
-            console.info(`Application started on port ${PORT} at ${new Date()}`)
-        })
-    })
-    .catch(e => {
-        console.error('Cannot start server: ', e)
-    })
+	try {
+		const [ result, _ ] = await conn.query(SQL_TV_LIST, [ LIMIT ])
+		resp.status(200)
+		resp.type('text/html')
+		resp.render('index', { shows: result })
+	} catch(e) {
+		console.error('ERROR: ', e)
+		resp.status(500)
+		resp.end()
+	} finally {
+		conn.release()
+	}
+})
+
+app.get('/show/:tvid', async (req, resp) => {
+
+	const tvid = req.params.tvid
+
+	const conn = await pool.getConnection()
+
+	try {
+		const [ result, _ ] = await conn.query(SQL_TV_SHOW, [ tvid ])
+		resp.status(200)
+		resp.type('text/html')
+		resp.render('show', { show: result[0], hasSite: !!result[0].official_site })
+	} catch(e) {
+		console.error('ERROR: ', e)
+		resp.status(500)
+		resp.end()
+	} finally {
+		conn.release()
+	}
+})
+
+app.use((req, resp) => {
+	resp.redirect('/')
+})
+
+// start application
+startApp(app, pool)
